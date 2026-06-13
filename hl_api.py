@@ -1,5 +1,5 @@
 import logging
-from pathlib import Path
+import sys
 
 import requests
 
@@ -8,7 +8,7 @@ REQUEST_TIMEOUT = 10
 
 logger = logging.getLogger("hyperliquid")
 if not logger.handlers:
-    _handler = logging.FileHandler(Path(__file__).parent / "trades.log")
+    _handler = logging.StreamHandler(sys.stdout)
     _handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
     logger.addHandler(_handler)
     logger.setLevel(logging.INFO)

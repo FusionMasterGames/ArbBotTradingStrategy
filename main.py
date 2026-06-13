@@ -1,7 +1,7 @@
 import logging
+import sys
 import time
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 
 import config
 from alerts import send_alert, send_error_alert, send_message
@@ -19,7 +19,7 @@ _last_error_alert: datetime | None = None
 
 logger = logging.getLogger("main")
 if not logger.handlers:
-    _handler = logging.FileHandler(Path(__file__).parent / "trades.log")
+    _handler = logging.StreamHandler(sys.stdout)
     _handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
     logger.addHandler(_handler)
     logger.setLevel(logging.INFO)

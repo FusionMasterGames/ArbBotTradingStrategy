@@ -1,9 +1,10 @@
 import logging
+import sys
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 
 import config
 from hl_api import fetch_all_markets, fetch_spot_markets
+from supabase_client import get_client, log_trade_event
 
 SPOT_HEDGE_MAX_DIVERGENCE = 0.05
 GAP_FLIP_ALERT_PCT = 0.25
@@ -21,7 +22,7 @@ _last_summary_time: datetime | None = None
 
 logger = logging.getLogger("monitor")
 if not logger.handlers:
-    _handler = logging.FileHandler(Path(__file__).parent / "trades.log")
+    _handler = logging.StreamHandler(sys.stdout)
     _handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
     logger.addHandler(_handler)
     logger.setLevel(logging.INFO)
@@ -89,6 +90,44 @@ def _format_usd_compact(value: float) -> str:
     return f"${value:.0f}"
 
 
+def _record_gap_history(timestamp: str, market: dict, gap: float) -> None:
+    """Insert one row per spot-blocked market per cycle into the Supabase
+    gap_history table, building a gap variance dataset (see gap_stats.py).
+    Any failure is logged and swallowed — this must never crash the bot loop."""
+    client = get_client()
+    if client is None:
+        return
+    try:
+        client.table("gap_history").insert({
+            "timestamp": timestamp,
+            "market": market["name"],
+            "funding_rate": round(market["funding_rate"], 5),
+            "oracle_gap": round(gap, 4),
+        }).execute()
+    except Exception as e:
+        logger.error("Failed to insert gap history for %s: %s", market["name"], e)
+
+
+def _log_opportunity_detected(market: dict) -> None:
+    """Emit an opportunity_detected event with full economics for a market that
+    passed every filter (funding, gap, OI, spot hedge, breakeven)."""
+    from executor import calculate_breakeven_hours, estimate_entry_cost
+    size = config.MAX_POSITION_SIZE_USD
+    costs = estimate_entry_cost(market, size)
+    hourly = size * abs(market["funding_rate"]) / 100
+    breakeven = calculate_breakeven_hours(hourly, costs["total"])
+    gap = calculate_mark_oracle_gap(market["mark_price"], market["oracle_price"])
+    log_trade_event("opportunity_detected", market["name"], {
+        "funding_rate": round(market["funding_rate"], 5),
+        "annualized_yield": round(calculate_annualized_yield(market["funding_rate"]), 1),
+        "gap": round(gap, 4),
+        "open_interest": round(market["open_interest"], 2),
+        "hourly_yield_usd": round(hourly, 4),
+        "entry_cost_usd": round(costs["total"], 4),
+        "breakeven_hours": round(breakeven, 2),
+    })
+
+
 def _log_spot_blocked(market: dict) -> None:
     """Log full would-be economics for markets blocked only by the missing
     spot hedge, so consistently-clean blocked trades show up over time."""
@@ -105,24 +144,37 @@ def _log_spot_blocked(market: dict) -> None:
         calculate_annualized_yield(market["funding_rate"]), gap,
         _format_usd_compact(market["open_interest"]), hourly, costs["total"], breakeven,
     )
+    _record_gap_history(datetime.now(timezone.utc).isoformat(), market, gap)
 
 
 def scan_markets() -> list[dict]:
     markets = fetch_all_markets()
     spot_prices = {m["name"]: m["price"] for m in fetch_spot_markets()}
     opportunities = []
+    clean = 0
+    cycle_rejections = {r: 0 for r in REJECTION_REASONS}
     for m in markets:
         reason = _classify_rejection(m, spot_prices)
         if reason is not None:
+            cycle_rejections[reason] += 1
             _rejection_tracker[reason].add(m["name"])
             if reason == REJECT_SPOT:
                 _log_spot_blocked(m)
+        else:
+            clean += 1
+            _log_opportunity_detected(m)
         # Breakeven is enforced (and logged) at execution time — keep
         # returning those markets so the executor makes the final call.
         if reason is None or reason == REJECT_BREAKEVEN:
             opportunities.append(m)
     opportunities.sort(key=lambda m: m["funding_rate"], reverse=True)
     logger.info("Scanned %d markets, found %d hedgeable opportunities", len(markets), len(opportunities))
+    log_trade_event("scan_summary", None, {
+        "markets_scanned": len(markets),
+        "opportunities": clean,
+        "returned_to_executor": len(opportunities),
+        "rejections": cycle_rejections,
+    })
     return opportunities
 
 

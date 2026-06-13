@@ -39,9 +39,21 @@ TELEGRAM_BOT_TOKEN=123456:ABC-your-token
 TELEGRAM_CHAT_ID=123456789
 WALLET_ADDRESS=0xYourHyperliquidWallet
 PRIVATE_KEY=0xYourPrivateKey
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_KEY=your-service-role-key
 ```
 
-`WALLET_ADDRESS`/`PRIVATE_KEY` are only required for live trading. The bot runs fine in simulation mode with just the Telegram credentials.
+`WALLET_ADDRESS`/`PRIVATE_KEY` are only required for live trading. `SUPABASE_URL`/`SUPABASE_KEY` are only required for gap-history persistence (see below) — without them the bot still runs and logs everything to `trades.log`, it just skips the database insert. The bot runs fine in simulation mode with just the Telegram credentials.
+
+### Set up Supabase gap-history persistence
+
+The spot-hedge-blocked gap dataset is stored in Supabase so it survives redeploys (Railway's filesystem is ephemeral).
+
+1. Create a project at [supabase.com](https://supabase.com)
+2. Open **SQL Editor → New query**, paste the contents of [`supabase_schema.sql`](supabase_schema.sql), and run it to create the `gap_history` table
+3. From **Project Settings → API**, copy the **Project URL** into `SUPABASE_URL` and a key into `SUPABASE_KEY` (the `service_role` key is simplest for a private backend bot — it bypasses Row Level Security)
+
+Then `python gap_stats.py` reads the table and prints per-market gap variance stats.
 
 ### Get a Telegram bot token (BotFather)
 
@@ -86,6 +98,8 @@ The live order path additionally requires `WALLET_ADDRESS` and `PRIVATE_KEY` in 
    - `TELEGRAM_CHAT_ID`
    - `WALLET_ADDRESS` (live trading only)
    - `PRIVATE_KEY` (live trading only)
+   - `SUPABASE_URL` (gap-history persistence)
+   - `SUPABASE_KEY` (gap-history persistence)
    Never commit these to the repo — Railway injects them as environment variables and `python-dotenv` falls through to real env vars when no `.env` file exists.
 4. In **Settings → Deploy**, set the start command:
    ```
@@ -112,6 +126,8 @@ Note: Railway's filesystem is ephemeral — `positions.json` is lost on redeploy
 | `TELEGRAM_CHAT_ID` | from `.env` | Your chat ID for alerts |
 | `WALLET_ADDRESS` | from `.env` | Hyperliquid wallet (live trading + balance checks) |
 | `PRIVATE_KEY` | from `.env` | Wallet private key (live trading only — keep it safe) |
+| `SUPABASE_URL` | from `.env` | Supabase project URL for gap-history persistence |
+| `SUPABASE_KEY` | from `.env` | Supabase API key (service_role recommended for a backend bot) |
 
 Hardcoded safety constants in `executor.py`: taker fee estimate `0.035%` per leg, max break-even `12h`, position caps (5% OI / 50% balance), order slippage tolerance `1%`. In `monitor.py`: spot-hedge price divergence `5%`, gap-flip alert threshold `0.25%`, summary interval `6h`.
 

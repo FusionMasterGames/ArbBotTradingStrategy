@@ -1,13 +1,14 @@
 import asyncio
 import logging
+import sys
 from datetime import datetime, timezone
-from pathlib import Path
 
 from telegram import Bot
 from telegram.error import TelegramError
 
 import config
 from monitor import calculate_annualized_yield, calculate_mark_oracle_gap
+from supabase_client import log_trade_event
 
 # Rough round-trip cost as % of notional: taker fee on open+close of both
 # the perp and spot legs. Used only for the break-even estimate in alerts.
@@ -15,7 +16,7 @@ ROUND_TRIP_FEE_PCT = 0.23
 
 logger = logging.getLogger("alerts")
 if not logger.handlers:
-    _handler = logging.FileHandler(Path(__file__).parent / "trades.log")
+    _handler = logging.StreamHandler(sys.stdout)
     _handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
     logger.addHandler(_handler)
     logger.setLevel(logging.INFO)
@@ -93,6 +94,7 @@ def send_exit_alert(market_name: str, funding_collected: float, hold_hours: floa
 
 
 def send_error_alert(error_message: str) -> bool:
+    log_trade_event("error", None, {"message": error_message})
     return _send(f"⚠️ BOT ERROR\n\n{error_message}")
 
 
@@ -108,4 +110,4 @@ if __name__ == "__main__":
     sent = send_alert(mock_opportunity)
     print(f"send_alert returned: {sent}")
     if not sent:
-        print("Not sent — check trades.log. Most likely TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID are empty in .env.")
+        print("Not sent — check the logs. Most likely TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID are empty in .env.")

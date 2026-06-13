@@ -1,5 +1,6 @@
 import json
 import logging
+import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -7,6 +8,7 @@ import config
 from alerts import send_error_alert, send_execution_alert, send_exit_alert
 from hl_api import _post_info, fetch_all_markets, fetch_spot_markets
 from monitor import calculate_mark_oracle_gap, filter_opportunity
+from supabase_client import log_trade_event
 
 TAKER_FEE_RATE = 0.00035
 MAX_BREAKEVEN_HOURS = 12
@@ -18,7 +20,7 @@ POSITIONS_FILE = Path(__file__).parent / "positions.json"
 
 logger = logging.getLogger("executor")
 if not logger.handlers:
-    _handler = logging.FileHandler(Path(__file__).parent / "trades.log")
+    _handler = logging.StreamHandler(sys.stdout)
     _handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
     logger.addHandler(_handler)
     logger.setLevel(logging.INFO)
@@ -275,6 +277,14 @@ def enter_delta_neutral(market: dict) -> dict | None:
         market["funding_rate"], position["max_hold_until"],
     )
     send_execution_alert(market["name"], position["spot_size"], position["perp_size"], market["mark_price"])
+    log_trade_event("position_opened", market["name"], {
+        "size_usd": size,
+        "spot_size": position["spot_size"],
+        "perp_size": position["perp_size"],
+        "entry_price": market["mark_price"],
+        "entry_funding_rate": market["funding_rate"],
+        "simulated": position["simulated"],
+    })
     return position
 
 
@@ -316,6 +326,12 @@ def close_delta_neutral(market_name: str, exit_reason: str) -> dict | None:
         hold_hours, exit_reason, funding_collected,
     )
     send_exit_alert(market_name, funding_collected, hold_hours, exit_reason)
+    log_trade_event("position_closed", market_name, {
+        "funding_collected": round(funding_collected, 4),
+        "hold_hours": round(hold_hours, 2),
+        "exit_reason": exit_reason,
+        "simulated": not config.AUTO_EXECUTE,
+    })
     return {"name": market_name, "funding_collected": funding_collected,
             "hold_hours": hold_hours, "exit_reason": exit_reason}
 
