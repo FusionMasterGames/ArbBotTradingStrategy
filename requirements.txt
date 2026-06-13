@@ -1,0 +1,5 @@
+python-dotenv
+requests
+python-telegram-bot
+hyperliquid-python-sdk
+eth-account

@@ -1,0 +1,4 @@
+.env
+positions.json
+trades.log
+__pycache__/
